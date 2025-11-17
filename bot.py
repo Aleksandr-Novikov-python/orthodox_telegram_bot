@@ -1,53 +1,36 @@
 import logging
 import asyncio
-import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
-from dotenv import load_dotenv
 
-load_dotenv()
-API_TOKEN = os.getenv("API_TOKEN")
+from aiogram import Bot, Dispatcher, F
 
-logging.basicConfig(level=logging.INFO)
+from handlers.filter import filter_router
+from handlers.admin import admin_router
+from handlers.moderation import db
 
+from config.config import API_TOKEN
+
+# ==================== LOGGING ====================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+# ==================== BOT INIT ====================
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-BAD_WORDS = {"плохое", "запрещённое", "ругательство"}
-violations = {}
+dp.include_router(filter_router)
+dp.include_router(admin_router)
 
-@dp.message()
-async def filter_messages(message: Message):
-    text = message.text.lower()
-    if any(bad in text for bad in BAD_WORDS):
-        try:
-            await message.delete()
-        except Exception as e:
-            logging.warning(f"Не удалось удалить сообщение: {e}")
-
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        violations[user_id] = violations.get(user_id, 0) + 1
-        count = violations[user_id]
-
-        await message.answer(
-            f"⚠️ {message.from_user.full_name}, нарушение #{count}. "
-            "После 3 нарушений будет бан."
-        )
-
-        if count >= 3:
-            try:
-                await bot.ban_chat_member(chat_id, user_id)
-                await message.answer(
-                    f"🚫 Пользователь {message.from_user.full_name} заблокирован."
-                )
-            except Exception as e:
-                logging.error(f"Не удалось забанить: {e}")
-
+# ==================== MAIN ====================
 async def main():
-    # Запускаем поллинг
-    await dp.start_polling(bot)
+    logging.info("🛠️ Инициализация БД...")
+    await db.init_db()
+    logging.info("🚀 Старт поллинга...")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
