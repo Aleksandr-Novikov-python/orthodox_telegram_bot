@@ -5,3 +5,4 @@ def load_bad_words(filename="bad_words.txt") -> set[str]:
 BAD_WORDS = load_bad_words()
 MAX_VIOLATIONS = 3
 BAN_DURATION = 86400 
+ADMIN_LOG_CHAT_ID = -1003450027830

@@ -1,6 +1,6 @@
 import aiosqlite
+import logging
 from datetime import datetime, timedelta
-
 
 
 class AsyncDatabase:
@@ -40,7 +40,11 @@ class AsyncDatabase:
                     ban_until DATETIME
                 )
             """)
+            # Индексы для ускорения поиска
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_violations_chat_user ON violations(chat_id, user_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_bans_chat_user ON bans(chat_id, user_id)")
             await conn.commit()
+            logging.info("✅ База данных инициализирована")
 
     async def add_violation(self, chat_id: int, user_id: int, username: str,
                             full_name: str, text: str) -> int:
@@ -61,7 +65,9 @@ class AsyncDatabase:
             """, (chat_id, user_id)) as cursor:
                 row = await cursor.fetchone()
             await conn.commit()
-            return row[0] if row else 1
+            count = row[0] if row else 1
+            logging.info(f"⚠️ Нарушение добавлено: chat={chat_id}, user={user_id}, count={count}")
+            return count
 
     async def get_violation_count(self, chat_id: int, user_id: int) -> int:
         async with aiosqlite.connect(self.db_name) as conn:
@@ -69,13 +75,16 @@ class AsyncDatabase:
                 SELECT count FROM violation_counts WHERE chat_id = ? AND user_id = ?
             """, (chat_id, user_id)) as cursor:
                 row = await cursor.fetchone()
-                return row[0] if row else 0
+                count = row[0] if row else 0
+                logging.info(f"ℹ️ Получено количество нарушений: chat={chat_id}, user={user_id}, count={count}")
+                return count
 
     async def reset_violations(self, chat_id: int, user_id: int):
         async with aiosqlite.connect(self.db_name) as conn:
             await conn.execute("DELETE FROM violation_counts WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
             await conn.execute("DELETE FROM violations WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
             await conn.commit()
+            logging.info(f"✅ Нарушения сброшены: chat={chat_id}, user={user_id}")
 
     async def add_ban(self, chat_id: int, user_id: int, banned_by: int,
                       reason: str, duration: int = 0):
@@ -88,5 +97,40 @@ class AsyncDatabase:
                 VALUES (?, ?, ?, ?, ?)
             """, (chat_id, user_id, banned_by, reason, ban_until))
             await conn.commit()
+            logging.info(f"🚫 Бан добавлен: chat={chat_id}, user={user_id}, by={banned_by}, duration={duration}")
+
+    async def get_violations(self, chat_id: int, user_id: int, limit: int = 10):
+        """Получить историю нарушений"""
+        async with aiosqlite.connect(self.db_name) as conn:
+            async with conn.execute("""
+                SELECT violation_text, timestamp
+                FROM violations
+                WHERE chat_id = ? AND user_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (chat_id, user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                logging.info(f"ℹ️ Получена история нарушений: chat={chat_id}, user={user_id}, count={len(rows)}")
+                return rows
+
+    async def is_banned(self, chat_id: int, user_id: int) -> bool:
+        """Проверка, есть ли активный бан"""
+        async with aiosqlite.connect(self.db_name) as conn:
+            async with conn.execute("""
+                SELECT ban_until FROM bans
+                WHERE chat_id = ? AND user_id = ?
+                ORDER BY banned_at DESC LIMIT 1
+            """, (chat_id, user_id)) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return False
+                if row[0] is None:
+                    logging.info(f"🚫 Пользователь {user_id} забанен навсегда")
+                    return True
+                active = datetime.now() < datetime.fromisoformat(row[0])
+                logging.info(f"🚫 Проверка бана: user={user_id}, active={active}")
+                return active
+
 
 db = AsyncDatabase()
+
